@@ -1,0 +1,218 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function authUid() {
+      return request.auth.uid;
+    }
+
+    function uidLinkRef(uid) {
+      return /databases/$(database)/documents/uidLinks/$(uid);
+    }
+
+    function linkedPlayerId(uid) {
+      return get(uidLinkRef(uid)).data.playerId;
+    }
+
+    function isLinkedTo(playerId) {
+      return isSignedIn()
+        && exists(uidLinkRef(authUid()))
+        && linkedPlayerId(authUid()) == playerId;
+    }
+
+    function isLinkedToAfter(playerId) {
+      return isSignedIn()
+        && existsAfter(uidLinkRef(authUid()))
+        && getAfter(uidLinkRef(authUid())).data.playerId == playerId;
+    }
+
+    function isLinkedToNowOrAfter(playerId) {
+      return isLinkedTo(playerId) || isLinkedToAfter(playerId);
+    }
+
+    function validName(v) {
+      return v is string && v.size() > 0 && v.size() <= 20;
+    }
+
+    function validDateKey(v) {
+      return v is string && v.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function validUidLinkCreate() {
+      return request.resource.data.keys().hasOnly([
+        'playerId', 'updatedAt'
+      ])
+      && request.resource.data.playerId is string
+      && request.resource.data.playerId.size() > 0
+      && request.resource.data.updatedAt != null;
+    }
+
+    function validUidLinkUpdate() {
+      return request.resource.data.keys().hasOnly([
+        'playerId', 'updatedAt'
+      ])
+      && request.resource.data.updatedAt != null
+      && request.resource.data.playerId == resource.data.playerId
+      && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'updatedAt'
+      ]);
+    }
+
+    function validProfileWrite() {
+      return request.resource.data.keys().hasOnly([
+        'name', 'updatedAt'
+      ])
+      && validName(request.resource.data.name)
+      && request.resource.data.updatedAt != null;
+    }
+
+    function validWordLetterCountItem(x) {
+      return x is int && x > 0 && x <= 30;
+    }
+
+    function validWordLetterCounts(v) {
+      return v is list
+        && v.size() > 0
+        && v.size() <= 5
+        && (v.size() < 1 || validWordLetterCountItem(v[0]))
+        && (v.size() < 2 || validWordLetterCountItem(v[1]))
+        && (v.size() < 3 || validWordLetterCountItem(v[2]))
+        && (v.size() < 4 || validWordLetterCountItem(v[3]))
+        && (v.size() < 5 || validWordLetterCountItem(v[4]));
+    }
+
+    function validGuessRow(row) {
+      return row is string
+        && row.size() > 0
+        && row.size() <= 200
+        && row.matches('^(correct|present|absent|space|revealed|tbd|empty)(,(correct|present|absent|space|revealed|tbd|empty)){0,29}$');
+    }
+
+    function validGuessStates(v) {
+      return v is list
+        && v.size() > 0
+        && v.size() <= 10
+        && (v.size() < 1 || validGuessRow(v[0]))
+        && (v.size() < 2 || validGuessRow(v[1]))
+        && (v.size() < 3 || validGuessRow(v[2]))
+        && (v.size() < 4 || validGuessRow(v[3]))
+        && (v.size() < 5 || validGuessRow(v[4]))
+        && (v.size() < 6 || validGuessRow(v[5]))
+        && (v.size() < 7 || validGuessRow(v[6]))
+        && (v.size() < 8 || validGuessRow(v[7]))
+        && (v.size() < 9 || validGuessRow(v[8]))
+        && (v.size() < 10 || validGuessRow(v[9]));
+    }
+
+    function validDailyCreate() {
+      return request.resource.data.keys().hasOnly([
+        'name', 'won', 'attempts', 'maxAttempts',
+        'wordLetterCounts', 'guessStates', 'submittedAt', 'partial'
+      ])
+      && validName(request.resource.data.name)
+      && request.resource.data.won is bool
+      && request.resource.data.attempts is int
+      && request.resource.data.maxAttempts is int
+      && request.resource.data.maxAttempts >= 6
+      && request.resource.data.maxAttempts <= 10
+      && request.resource.data.attempts >= 1
+      && request.resource.data.attempts <= request.resource.data.maxAttempts
+      && validWordLetterCounts(request.resource.data.wordLetterCounts)
+      && validGuessStates(request.resource.data.guessStates)
+      && request.resource.data.submittedAt != null
+      && (!('partial' in request.resource.data) || request.resource.data.partial is bool);
+    }
+
+    function validAlltimeCreate() {
+      return request.resource.data.keys().hasOnly([
+        'gamesPlayed', 'gamesWon', 'totalAttempts', 'lastDate', 'gamesAbandoned'
+      ])
+      && request.resource.data.gamesPlayed is int
+      && request.resource.data.gamesPlayed >= 0
+      && request.resource.data.gamesWon is int
+      && request.resource.data.gamesWon >= 0
+      && request.resource.data.gamesWon <= request.resource.data.gamesPlayed
+      && request.resource.data.totalAttempts is int
+      && request.resource.data.totalAttempts >= request.resource.data.gamesPlayed
+      && validDateKey(request.resource.data.lastDate)
+      && (!('gamesAbandoned' in request.resource.data) || request.resource.data.gamesAbandoned is int);
+    }
+
+    // Partial-only write: only gamesAbandoned is set (player abandoned before finishing any game).
+    function validAlltimeAbandonOnly() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(['gamesAbandoned'])
+        && request.resource.data.gamesAbandoned is int
+        && request.resource.data.gamesAbandoned >= 0;
+    }
+
+    function validAlltimeUpdate() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'gamesPlayed', 'gamesWon', 'totalAttempts', 'lastDate', 'gamesAbandoned'
+      ])
+      && request.resource.data.gamesPlayed is int
+      && request.resource.data.gamesPlayed >= 0
+      && request.resource.data.gamesWon is int
+      && request.resource.data.gamesWon >= 0
+      && request.resource.data.gamesWon <= request.resource.data.gamesPlayed
+      && request.resource.data.totalAttempts is int
+      && request.resource.data.totalAttempts >= request.resource.data.gamesPlayed
+      && validDateKey(request.resource.data.lastDate)
+      && (!('gamesAbandoned' in request.resource.data) || request.resource.data.gamesAbandoned is int);
+    }
+
+    match /uidLinks/{uid} {
+      allow read: if isSignedIn() && authUid() == uid;
+      allow create: if isSignedIn() && authUid() == uid && validUidLinkCreate();
+      allow update: if isSignedIn() && authUid() == uid && validUidLinkUpdate();
+      allow delete: if false;
+    }
+
+    match /profiles/{playerId} {
+      allow read: if true;
+      allow create: if isLinkedToNowOrAfter(playerId) && validProfileWrite();
+      allow update: if isLinkedTo(playerId) && validProfileWrite();
+      allow delete: if false;
+    }
+
+    function validDailyUpgrade() {
+      // Allow updating a partial entry: either with more guesses (partial→partial)
+      // or with the final result (partial→final).
+      return resource.data.partial == true
+        && validDailyCreate();
+    }
+
+    match /daily/{date}/entries/{playerId} {
+      allow read: if true;
+      allow create: if isLinkedTo(playerId)
+        && validDateKey(date)
+        && validDailyCreate();
+      allow update: if isLinkedTo(playerId)
+        && validDateKey(date)
+        && validDailyUpgrade();
+      allow delete: if false;
+    }
+
+    match /alltime/{playerId} {
+      allow read: if true;
+      allow create: if isLinkedTo(playerId) && validAlltimeCreate();
+      allow update: if isLinkedTo(playerId) && (validAlltimeUpdate() || validAlltimeAbandonOnly());
+      allow delete: if false;
+    }
+
+    match /wordHistory/{date} {
+      allow read: if true;
+      allow create, update: if isSignedIn()
+        && validDateKey(date)
+        && request.resource.data.keys().hasOnly(['date', 'word', 'addedAt'])
+        && request.resource.data.date is string
+        && request.resource.data.word is string
+        && request.resource.data.word.size() > 0
+        && request.resource.data.word.size() <= 100
+        && request.resource.data.addedAt != null;
+      allow delete: if false;
+    }
+  }
+}
